@@ -1,0 +1,35 @@
+# ============================================================
+# AI News MCP Server — Python Dependencies
+# ============================================================
+# Install all at once: pip install -r requirements.txt
+# ============================================================
+
+# ── Web Framework ────────────────────────────────────────────
+fastapi==0.115.6          # Modern async web framework (like Flask but faster)
+uvicorn[standard]>=0.34.0 # ASGI server to run FastAPI
+
+# ── MCP Server ───────────────────────────────────────────────
+# Model Context Protocol — lets AI clients discover and call our tools
+# FastMCP is included in the mcp package since v1.0
+mcp[cli]>=1.5.0
+
+# ── Google ADK (AI Agent) ────────────────────────────────────
+# Agent Development Kit — orchestrates Gemini AI with tools
+# Docs: https://google.github.io/adk-docs/
+google-adk==0.5.0
+
+# ── Telegram Bot ─────────────────────────────────────────────
+# Official Python wrapper for Telegram Bot API
+python-telegram-bot==21.9
+
+# ── HTTP Client & HTML Parser (for scraping) ─────────────────
+httpx==0.28.1             # Async HTTP client (better than requests for async)
+beautifulsoup4==4.12.3    # HTML parser — extracts data from web pages
+lxml==5.3.0               # Fast HTML/XML parser (backend for BeautifulSoup)
+
+# ── Configuration ─────────────────────────────────────────────
+pydantic-settings==2.7.0  # Type-safe settings from env vars
+python-dotenv==1.0.1      # Load .env file automatically
+
+# ── Scheduler ─────────────────────────────────────────────────
+APScheduler==3.10.4       # Background job scheduler (cron-like)

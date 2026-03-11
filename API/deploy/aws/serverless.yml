@@ -1,0 +1,78 @@
+# ============================================================
+# AWS Serverless Framework Config
+# ============================================================
+# Deploys the bot as AWS Lambda + API Gateway + EventBridge
+#
+# Free Tier:
+#   Lambda:      1M requests/month, 400K GB-seconds compute
+#   API Gateway: 1M REST API calls/month
+#   EventBridge: 14M events/month (our scheduler)
+#
+# Install Serverless Framework:
+#   npm install -g serverless
+#   pip install serverless-python-requirements  (plugin)
+#
+# Deploy:
+#   serverless deploy
+#
+# Remove:
+#   serverless remove
+# ============================================================
+
+service: ai-news-bot
+
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: us-east-1
+  timeout: 300          # 5 minutes (for scraping + AI)
+  memorySize: 512       # 512 MB RAM
+
+  # Environment variables (set in AWS SSM Parameter Store or Secrets Manager)
+  environment:
+    GOOGLE_API_KEY: ${ssm:/ai-news-bot/GOOGLE_API_KEY}
+    TELEGRAM_TOKEN: ${ssm:/ai-news-bot/TELEGRAM_TOKEN}
+    TELEGRAM_CHAT_ID: ${ssm:/ai-news-bot/TELEGRAM_CHAT_ID}
+    WEBHOOK_URL: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  # Permissions this Lambda needs
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - ssm:GetParameter
+          Resource: "arn:aws:ssm:*:*:parameter/ai-news-bot/*"
+
+functions:
+  # Main API handler (FastAPI via Mangum adapter)
+  api:
+    handler: lambda_handler.handler   # See lambda_handler.py
+    events:
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: /
+          method: ANY
+          cors: true
+
+  # Scheduled news job (runs daily at 9 AM UTC)
+  scheduler:
+    handler: lambda_handler.scheduled_handler
+    events:
+      - schedule:
+          rate: cron(0 9 * * ? *)     # 9:00 AM UTC daily
+          enabled: true
+          description: "Daily AI news delivery to Telegram"
+
+plugins:
+  - serverless-python-requirements   # Handles pip install for Lambda
+
+custom:
+  pythonRequirements:
+    dockerizePip: true               # Use Docker for native dependencies (lxml)
+    slim: true                       # Remove unused files to reduce package size
