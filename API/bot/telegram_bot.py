@@ -159,7 +159,7 @@ async def ainews_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     4. Send formatted news
     """
     loading_msg = await update.message.reply_text(
-        "⏳ Fetching AI news... This takes 10\\-30 seconds\\.  Please wait\\!",
+        "⏳ Fetching AI news\\.\\.\\. This takes 10\\-30 seconds\\.  Please wait\\!",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
@@ -222,13 +222,16 @@ async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle /sources — show list of news sources."""
     text = (
         "📡 *News Sources*\n\n"
-        "1\\. *Marktechpost*\n"
+        "1\\. *Marktechpost* \\(RSS\\)\n"
         "   AI/ML research papers and industry news\n"
         "   _marktechpost\\.com_\n\n"
-        "2\\. *HackerNews*\n"
+        "2\\. *HackerNews* \\(Algolia API\\)\n"
         "   Tech community discussions about AI\n"
         "   _news\\.ycombinator\\.com_\n\n"
-        "_Articles cached for 30 minutes to avoid rate limiting_"
+        "3\\. *DEV\\.to* \\(Public API\\)\n"
+        "   Developer AI articles and tutorials\n"
+        "   _dev\\.to_\n\n"
+        "_All free · No API keys · Cached 30 min_"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 

@@ -63,7 +63,7 @@ API/
 │   └── settings.py         # All settings loaded from env vars
 │
 ├── scraper/
-│   └── news.py             # Async scraper: Marktechpost + HackerNews
+│   └── news.py             # Async fetcher: Marktechpost (RSS) + HackerNews + DEV.to
 │                           # 30-min in-memory cache included
 │
 ├── mcp_server/
@@ -274,7 +274,7 @@ jobs:
 | MCP Server | FastMCP (official Python MCP SDK) |
 | AI Agent | Google ADK + Gemini 2.0 Flash |
 | Telegram | python-telegram-bot v21 |
-| Scraper | httpx + BeautifulSoup4 |
+| Scraper | httpx + stdlib xml.etree (RSS + JSON APIs) |
 | Scheduler | APScheduler |
 | Config | pydantic-settings |
 | GCP Deploy | Cloud Run + Cloud Scheduler |

@@ -61,11 +61,12 @@ mcp = FastMCP(
 @mcp.tool()
 async def scrape_ai_news(limit: int = 5) -> str:
     """
-    Scrapes the latest AI and machine learning news from multiple sources.
+    Fetches the latest AI and machine learning news from multiple sources.
 
     Sources:
-    - Marktechpost: AI research papers and industry news
-    - HackerNews: Tech community discussions about AI
+    - Marktechpost (RSS): AI research papers and industry news
+    - HackerNews (API):   Tech community discussions about AI
+    - DEV.to (API):       Developer-focused AI articles
 
     Args:
         limit: Number of articles to fetch (default: 5, max recommended: 10)

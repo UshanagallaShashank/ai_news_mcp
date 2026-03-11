@@ -2,29 +2,31 @@
 News Scraper
 ============
 
-Scrapes AI news from multiple sources:
-  1. Marktechpost  — AI/ML research articles
-  2. HackerNews    — Tech community stories (via free Algolia API)
+Fetches AI news from 3 reliable, free sources — NO API keys needed:
+
+  1. Marktechpost  — via RSS feed  (avoids 403 from HTML scraping)
+  2. HackerNews    — via Algolia search API (official, free)
+  3. DEV.to        — via public REST API  (developer AI articles)
+
+Why RSS instead of HTML scraping for Marktechpost?
+  - The homepage returns 403 Forbidden to bots
+  - RSS feeds are designed to be consumed by programs — always allowed
+  - Gives cleaner, structured data (no HTML parsing needed)
 
 Features:
-  - Async HTTP requests (fast, non-blocking)
-  - In-memory cache (avoids hammering sites repeatedly)
-  - Graceful error handling (one source failing won't crash everything)
-
-Dependencies:
-  httpx          — Async HTTP client (better than requests for async apps)
-  beautifulsoup4 — HTML parser
-  lxml           — Fast HTML parser backend for BeautifulSoup
+  - Async HTTP (all 3 sources fetched simultaneously if needed)
+  - 30-min in-memory cache (avoid hammering sites)
+  - Each source fails independently (one 404 won't kill the others)
 """
 
 import time
-import json
 import logging
 from dataclasses import dataclass, asdict
 from typing import Optional
+import xml.etree.ElementTree as ET   # Built-in XML parser for RSS feeds
+import re
 
 import httpx
-from bs4 import BeautifulSoup
 
 from config.settings import settings
 
@@ -35,12 +37,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Article:
-    """
-    Represents a single news article.
-
-    @dataclass automatically generates __init__, __repr__, etc.
-    Think of it as a simple container/struct.
-    """
+    """One news article from any source."""
     title: str
     url: str
     source: str
@@ -48,235 +45,370 @@ class Article:
     date: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """Convert to plain dictionary (for JSON serialization)"""
         return asdict(self)
 
 
-# ── Simple In-Memory Cache ─────────────────────────────────────────
-# Avoids scraping the same sites multiple times in a short window.
-# Key: cache key string  →  Value: (data, timestamp)
+# ── Cache ─────────────────────────────────────────────────────────
+# Simple dict: key → (articles_list, timestamp)
 _cache: dict[str, tuple[list, float]] = {}
 
 
-def _get_from_cache(key: str) -> Optional[list[Article]]:
-    """Return cached articles if still fresh, else None."""
+def _cache_get(key: str) -> Optional[list[Article]]:
     if key not in _cache:
         return None
     articles, cached_at = _cache[key]
-    age = time.time() - cached_at
-    if age < settings.news_cache_ttl:
-        logger.info(f"Cache hit for '{key}' (age: {int(age)}s)")
+    if time.time() - cached_at < settings.news_cache_ttl:
+        logger.info(f"Cache hit: '{key}'")
         return articles
-    logger.info(f"Cache expired for '{key}' (age: {int(age)}s)")
     return None
 
 
-def _save_to_cache(key: str, articles: list[Article]) -> None:
-    """Save articles to cache with current timestamp."""
+def _cache_set(key: str, articles: list[Article]) -> None:
     _cache[key] = (articles, time.time())
 
 
-# ── HTTP Client Config ────────────────────────────────────────────
-# Pretend to be a browser so sites don't block us
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
+# ── Helpers ───────────────────────────────────────────────────────
+
+def _strip_html(html: str) -> str:
+    """Remove HTML tags and decode common HTML entities."""
+    text = re.sub(r"<[^>]+>", "", html)        # Remove tags
+    text = text.replace("&amp;", "&")
+    text = text.replace("&lt;", "<")
+    text = text.replace("&gt;", ">")
+    text = text.replace("&quot;", '"')
+    text = text.replace("&#8217;", "'")
+    text = text.replace("&#8220;", '"')
+    text = text.replace("&#8221;", '"')
+    text = text.replace("&nbsp;", " ")
+    return text.strip()
 
 
-# ── Source 1: Marktechpost ────────────────────────────────────────
-
-async def scrape_marktechpost(limit: int = 5) -> list[Article]:
+def _parse_rss_date(rss_date: str) -> str:
     """
-    Scrape latest AI research news from Marktechpost.com
+    Convert RSS pubDate string to YYYY-MM-DD format.
+    RSS dates look like: 'Tue, 11 Mar 2025 12:00:00 +0000'
+    """
+    try:
+        from email.utils import parsedate
+        from datetime import date
+        parsed = parsedate(rss_date)
+        if parsed:
+            return f"{parsed[0]:04d}-{parsed[1]:02d}-{parsed[2]:02d}"
+    except Exception:
+        pass
+    # Return first 10 chars as fallback if parsing fails
+    return rss_date[:10] if len(rss_date) >= 10 else rss_date
 
-    How it works:
-    1. Fetch the homepage HTML
-    2. Find <article> tags (each one is a news card)
-    3. Extract title, URL, summary, and date from each card
 
-    Args:
-        limit: Max articles to return
+# ── Source 1: Marktechpost RSS Feed ──────────────────────────────
 
-    Returns:
-        List of Article objects (may be empty if scraping fails)
+async def fetch_marktechpost(limit: int = 5) -> list[Article]:
+    """
+    Fetch AI research news from Marktechpost via their RSS feed.
+
+    RSS URL: https://www.marktechpost.com/feed/
+    Format:  RSS 2.0 XML
+
+    Using RSS instead of scraping the homepage because:
+    - Homepage returns 403 Forbidden to automated requests
+    - RSS is explicitly designed for programmatic consumption
+    - Data is already structured — no HTML parsing needed
+
+    XML namespaces used by this feed:
+      dc:   http://purl.org/dc/elements/1.1/   (for dc:creator)
+      content: http://purl.org/rss/1.0/modules/content/
     """
     cache_key = f"marktechpost_{limit}"
-    cached = _get_from_cache(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
         return cached
 
-    url = "https://www.marktechpost.com/"
+    rss_url = "https://www.marktechpost.com/feed/"
     articles: list[Article] = []
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, headers=HEADERS, follow_redirects=True) as client:
-            response = await client.get(url)
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(rss_url, headers={
+                # RSS readers identify themselves — sites always allow this
+                "User-Agent": "Mozilla/5.0 (compatible; RSS Reader/1.0)",
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            })
             response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "lxml")
+        # Parse RSS XML
+        # ElementTree requires we handle namespaces manually
+        NS = {
+            "dc":      "http://purl.org/dc/elements/1.1/",
+            "content": "http://purl.org/rss/1.0/modules/content/",
+            "media":   "http://search.yahoo.com/mrss/",
+        }
 
-        # Each article is inside an <article> HTML tag
-        for card in soup.select("article")[:limit * 2]:  # Fetch extra, filter later
-            # Title and URL are in a heading's anchor tag
-            title_tag = card.select_one("h2 a, h3 a, h4 a")
-            if not title_tag:
+        root = ET.fromstring(response.text)
+        channel = root.find("channel")
+
+        if channel is None:
+            logger.warning("Marktechpost RSS: no <channel> element found")
+            return []
+
+        for item in channel.findall("item")[:limit]:
+            # Required fields
+            title_el = item.find("title")
+            link_el  = item.find("link")
+
+            if title_el is None or link_el is None:
                 continue
 
-            title = title_tag.get_text(strip=True)
-            article_url = title_tag.get("href", "")
+            title = (title_el.text or "").strip()
+            url   = (link_el.text or "").strip()
 
-            if not title or not article_url:
+            if not title or not url:
                 continue
 
-            # Optional: get excerpt/summary
-            summary_tag = card.select_one(".entry-content p, .excerpt p, p")
-            summary = summary_tag.get_text(strip=True)[:300] if summary_tag else None
+            # Optional: publication date
+            pub_date_el = item.find("pubDate")
+            date = _parse_rss_date(pub_date_el.text or "") if pub_date_el is not None else None
 
-            # Optional: get date
-            date_tag = card.select_one("time, .post-date, .entry-date")
-            date = date_tag.get_text(strip=True) if date_tag else None
+            # Optional: description/summary (may contain HTML)
+            desc_el = item.find("description")
+            summary = None
+            if desc_el is not None and desc_el.text:
+                raw = _strip_html(desc_el.text)
+                summary = raw[:300] + "..." if len(raw) > 300 else raw
 
             articles.append(Article(
                 title=title,
-                url=article_url,
+                url=url,
                 source="Marktechpost",
                 summary=summary,
                 date=date,
             ))
 
-            if len(articles) >= limit:
-                break
-
-        logger.info(f"Scraped {len(articles)} articles from Marktechpost")
-        _save_to_cache(cache_key, articles)
+        logger.info(f"Marktechpost RSS: fetched {len(articles)} articles")
+        _cache_set(cache_key, articles)
         return articles
 
+    except ET.ParseError as e:
+        logger.error(f"Marktechpost RSS XML parse error: {e}")
+        return []
     except httpx.TimeoutException:
-        logger.warning("Marktechpost request timed out")
+        logger.warning("Marktechpost RSS timed out")
         return []
     except Exception as e:
-        logger.error(f"Marktechpost scraping failed: {e}")
+        logger.error(f"Marktechpost RSS failed: {e}")
         return []
 
 
-# ── Source 2: HackerNews (via Algolia API) ────────────────────────
+# ── Source 2: HackerNews via Algolia API ─────────────────────────
 
-async def scrape_hackernews(limit: int = 5) -> list[Article]:
+async def fetch_hackernews(limit: int = 5) -> list[Article]:
     """
-    Fetch AI/ML stories from HackerNews via the free Algolia search API.
+    Fetch top AI/ML stories from HackerNews via Algolia search API.
 
-    Why Algolia API instead of scraping?
-    - HN has an official search API (no scraping needed!)
-    - More reliable than HTML scraping
-    - Returns structured JSON data
+    API: https://hn.algolia.com/api/v1/search
+    - Free, no API key required
+    - Returns JSON, much easier than parsing HTML
+    - We filter by points>15 to keep only quality stories
 
     API docs: https://hn.algolia.com/api
-
-    Args:
-        limit: Max articles to return
-
-    Returns:
-        List of Article objects
     """
     cache_key = f"hackernews_{limit}"
-    cached = _get_from_cache(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
         return cached
 
-    # Algolia's free HackerNews search API
-    api_url = "https://hn.algolia.com/api/v1/search"
     articles: list[Article] = []
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(api_url, params={
-                "query": "artificial intelligence machine learning LLM",
-                "tags": "story",                    # Only top-level stories (not comments)
-                "numericFilters": "points>15",       # Filter low-quality stories
-                "hitsPerPage": limit,
-            })
+            response = await client.get(
+                "https://hn.algolia.com/api/v1/search",
+                params={
+                    "query": "artificial intelligence machine learning LLM",
+                    "tags": "story",           # Only stories, not comments
+                    "numericFilters": "points>15",  # Quality filter
+                    "hitsPerPage": limit,
+                },
+            )
             response.raise_for_status()
 
-        data = response.json()
-
-        for hit in data.get("hits", []):
-            title = hit.get("title", "").strip()
+        for hit in response.json().get("hits", []):
+            title = (hit.get("title") or "").strip()
             if not title:
                 continue
 
-            # Story URL or HN discussion page as fallback
-            story_url = hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
-            date_str = hit.get("created_at", "")[:10]  # "2024-01-15T..." → "2024-01-15"
+            # Use the linked article URL, fall back to HN discussion
+            story_url = hit.get("url") or (
+                f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
+            )
 
-            points = hit.get("points", 0)
+            points  = hit.get("points", 0)
             comments = hit.get("num_comments", 0)
+            date     = (hit.get("created_at") or "")[:10]  # "2024-01-15T..." → "2024-01-15"
 
             articles.append(Article(
                 title=title,
                 url=story_url,
                 source="HackerNews",
                 summary=f"{points} points · {comments} comments",
-                date=date_str,
+                date=date,
             ))
 
-        logger.info(f"Fetched {len(articles)} articles from HackerNews")
-        _save_to_cache(cache_key, articles)
+        logger.info(f"HackerNews: fetched {len(articles)} articles")
+        _cache_set(cache_key, articles)
         return articles
 
     except httpx.TimeoutException:
-        logger.warning("HackerNews API request timed out")
+        logger.warning("HackerNews API timed out")
         return []
     except Exception as e:
         logger.error(f"HackerNews fetch failed: {e}")
         return []
 
 
-# ── Main Scraping Function ────────────────────────────────────────
+# ── Source 3: DEV.to Public API ───────────────────────────────────
+
+async def fetch_devto(limit: int = 5) -> list[Article]:
+    """
+    Fetch AI-tagged articles from DEV.to (developer community blog).
+
+    API: https://dev.to/api/articles?tag=ai
+    - Free, no API key required
+    - Returns JSON with full article metadata
+    - Great source for practical/tutorial AI content
+
+    API docs: https://developers.forem.com/api
+    """
+    cache_key = f"devto_{limit}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    articles: list[Article] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://dev.to/api/articles",
+                params={
+                    "tag": "ai",
+                    "per_page": limit,
+                    "top": 1,       # Sort by most popular in last 24h
+                },
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+
+        for item in response.json():
+            title = (item.get("title") or "").strip()
+            url   = item.get("url") or item.get("canonical_url") or ""
+
+            if not title or not url:
+                continue
+
+            # description is already plain text
+            summary = item.get("description") or None
+            if summary:
+                summary = summary[:300] + "..." if len(summary) > 300 else summary
+
+            # published_at looks like "2024-01-15T12:00:00Z"
+            pub = item.get("published_at") or ""
+            date = pub[:10] if len(pub) >= 10 else None
+
+            reactions = item.get("public_reactions_count", 0)
+            comments  = item.get("comments_count", 0)
+
+            # Append reaction count to summary for context
+            if reactions or comments:
+                meta = f"{reactions} reactions · {comments} comments"
+                summary = f"{summary}\n{meta}" if summary else meta
+
+            articles.append(Article(
+                title=title,
+                url=url,
+                source="DEV.to",
+                summary=summary,
+                date=date,
+            ))
+
+        logger.info(f"DEV.to: fetched {len(articles)} articles")
+        _cache_set(cache_key, articles)
+        return articles
+
+    except httpx.TimeoutException:
+        logger.warning("DEV.to API timed out")
+        return []
+    except Exception as e:
+        logger.error(f"DEV.to fetch failed: {e}")
+        return []
+
+
+# ── Main Function ─────────────────────────────────────────────────
+
+# Map source name → fetch function
+_SOURCE_MAP = {
+    "marktechpost": fetch_marktechpost,
+    "hackernews":   fetch_hackernews,
+    "devto":        fetch_devto,
+}
+
+ALL_SOURCES = list(_SOURCE_MAP.keys())
+
 
 async def scrape_news(
     limit: int = 5,
     sources: Optional[list[str]] = None,
 ) -> list[Article]:
     """
-    Fetch AI news from all sources and combine results.
+    Fetch AI news from multiple sources and return a combined list.
 
-    This is the main function used by the MCP server, ADK agent, and API.
+    This is the single entry point used by:
+    - MCP server tools
+    - ADK agent tools
+    - REST API (/news endpoint)
+    - Scheduler (daily job)
 
     Args:
-        limit:   Total number of articles to return
-        sources: Which sources to use. Default: all sources.
-                 Options: "marktechpost", "hackernews"
+        limit:   Total number of articles to return (split across sources)
+        sources: Which sources to use. Defaults to all three.
+                 Valid values: "marktechpost", "hackernews", "devto"
 
     Returns:
-        Combined list of Article objects, up to `limit` total.
+        Combined list of Articles, up to `limit` total.
+        Order: Marktechpost → HackerNews → DEV.to
 
     Example:
+        # Get 6 articles: 2 from each source
         articles = await scrape_news(limit=6)
-        # → 3 from Marktechpost + 3 from HackerNews
+
+        # Get only from HackerNews
+        articles = await scrape_news(limit=5, sources=["hackernews"])
     """
     if sources is None:
-        sources = ["marktechpost", "hackernews"]
+        sources = ALL_SOURCES
 
-    # Split limit evenly across sources
-    per_source = max(1, limit // len(sources))
-    remainder = limit - (per_source * len(sources))
+    # Validate source names
+    valid_sources = [s for s in sources if s in _SOURCE_MAP]
+    if not valid_sources:
+        logger.warning(f"No valid sources in: {sources}. Using all.")
+        valid_sources = ALL_SOURCES
+
+    # Distribute the limit as evenly as possible across sources
+    n = len(valid_sources)
+    per_source = max(1, limit // n)
+    # First source gets any leftover (e.g. limit=5, n=2 → [3, 2])
+    quotas = [per_source + (limit - per_source * n if i == 0 else 0)
+              for i in range(n)]
 
     all_articles: list[Article] = []
 
-    if "marktechpost" in sources:
-        # Give first source any remainder articles
-        fetch_limit = per_source + (remainder if not all_articles else 0)
-        articles = await scrape_marktechpost(fetch_limit)
-        all_articles.extend(articles)
+    for source_name, quota in zip(valid_sources, quotas):
+        fetch_fn = _SOURCE_MAP[source_name]
+        try:
+            articles = await fetch_fn(quota)
+            all_articles.extend(articles)
+        except Exception as e:
+            # One source failing should never crash the entire job
+            logger.error(f"Source '{source_name}' raised an exception: {e}")
 
-    if "hackernews" in sources:
-        articles = await scrape_hackernews(per_source)
-        all_articles.extend(articles)
-
-    logger.info(f"Total articles fetched: {len(all_articles)}")
+    logger.info(f"Total articles returned: {len(all_articles[:limit])}")
     return all_articles[:limit]

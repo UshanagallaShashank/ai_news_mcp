@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     webhook_url: Optional[str] = None
 
     # ── News Scraping ──────────────────────────────────────────────
-    news_limit: int = 5          # How many articles to fetch
+    # Sources: "marktechpost" (RSS feed), "hackernews" (API), "devto" (API)
+    news_limit: int = 6          # 6 total = 2 from each of the 3 sources
     news_cache_ttl: int = 1800   # Cache articles for 30 minutes (seconds)
 
     # ── Auto-Send Schedule (UTC time) ──────────────────────────────

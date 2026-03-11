@@ -22,10 +22,10 @@ google-adk==0.5.0
 # Official Python wrapper for Telegram Bot API
 python-telegram-bot==21.9
 
-# ── HTTP Client & HTML Parser (for scraping) ─────────────────
+# ── HTTP Client (for scraping + API calls) ───────────────────
 httpx==0.28.1             # Async HTTP client (better than requests for async)
-beautifulsoup4==4.12.3    # HTML parser — extracts data from web pages
-lxml==5.3.0               # Fast HTML/XML parser (backend for BeautifulSoup)
+# Note: RSS XML is parsed with Python's built-in xml.etree.ElementTree
+# No extra HTML parsing library needed — we use RSS feeds + JSON APIs
 
 # ── Configuration ─────────────────────────────────────────────
 pydantic-settings==2.7.0  # Type-safe settings from env vars
