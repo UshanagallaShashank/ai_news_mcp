@@ -24,6 +24,7 @@ Uvicorn docs:  https://www.uvicorn.org/
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -34,6 +35,11 @@ from config.settings import settings
 from mcp_server.server import mcp
 from scheduler.jobs import scheduler, start_scheduler, run_news_job
 from bot.telegram_bot import application as telegram_app, setup_bot_commands
+
+# ── Environment Detection ─────────────────────────────────────────
+# Cloud Run sets K_SERVICE automatically. We use this to know we're
+# running serverless and should skip APScheduler (use Cloud Scheduler instead).
+IS_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
 
 # ── Logging ───────────────────────────────────────────────────────
 # Configure logging early so we see all startup messages
@@ -74,9 +80,19 @@ async def lifespan(app: FastAPI):
             "Run dev.py for local development with polling."
         )
 
-    # Start APScheduler (background job for daily news)
-    # Note: if using GCP Cloud Scheduler → remove this, use /trigger endpoint
-    start_scheduler()
+    # ── Scheduler ─────────────────────────────────────────────────
+    # Cloud Run scales to ZERO when idle — no persistent process = APScheduler dies.
+    # Solution: Cloud Scheduler hits POST /trigger on cron schedule instead.
+    #
+    # VPS / always-on server → APScheduler runs fine (keeps process alive)
+    if IS_CLOUD_RUN:
+        logger.info(
+            "Cloud Run detected (K_SERVICE env var set). "
+            "Skipping APScheduler — use GCP Cloud Scheduler to POST /trigger daily."
+        )
+    else:
+        start_scheduler()
+        logger.info("APScheduler started (local/VPS mode)")
 
     logger.info("Server ready!")
 
@@ -84,7 +100,8 @@ async def lifespan(app: FastAPI):
 
     # ── SHUTDOWN ──────────────────────────────
     logger.info("Shutting down...")
-    scheduler.shutdown(wait=False)
+    if not IS_CLOUD_RUN and scheduler.running:
+        scheduler.shutdown(wait=False)
     await telegram_app.stop()
     await telegram_app.shutdown()
     logger.info("Shutdown complete")
@@ -136,7 +153,7 @@ async def health_check():
 @app.get("/news", tags=["News"])
 async def get_news(
     limit: int = 5,
-    sources: str = "marktechpost,hackernews",
+    sources: str = "marktechpost,hackernews,devto",
 ):
     """
     Fetch news directly via REST API (no AI processing).
