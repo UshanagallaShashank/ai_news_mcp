@@ -14,7 +14,7 @@ Usage:
 Add to Claude Desktop (claude_desktop_config.json):
     {
       "mcpServers": {
-        "ai-news": {
+        "news": {
           "command": "python",
           "args": ["-m", "mcp_server"],
           "cwd": "/path/to/MCP-news/API"
@@ -25,17 +25,13 @@ Add to Claude Desktop (claude_desktop_config.json):
 Add to Cursor (.cursor/mcp.json):
     {
       "mcpServers": {
-        "ai-news": {
+        "news": {
           "command": "python",
           "args": ["-m", "mcp_server"],
           "cwd": "/path/to/MCP-news/API"
         }
       }
     }
-
-Environment variables needed:
-    GOOGLE_API_KEY    — Only needed if you use the ADK agent (/ainews)
-                        Not required for pure MCP tool usage.
 """
 
 import argparse
@@ -55,7 +51,7 @@ from mcp_server.server import mcp
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AI News MCP Server")
+    parser = argparse.ArgumentParser(description="News MCP Server")
     parser.add_argument(
         "--transport",
         choices=["stdio", "sse"],

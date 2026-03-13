@@ -32,13 +32,6 @@ class Settings(BaseSettings):
         extra="ignore",  # Ignore unknown env vars (safe to have extras)
     )
 
-    # ── Google AI (Gemini) ─────────────────────────────────────────
-    # Get your key from: https://aistudio.google.com/apikey  (free!)
-    google_api_key: str
-
-    # Set to TRUE if using Google Cloud Vertex AI instead of AI Studio
-    google_genai_use_vertexai: bool = False
-
     # ── Telegram ───────────────────────────────────────────────────
     # Get from: @BotFather on Telegram → /newbot
     telegram_token: str
@@ -61,11 +54,6 @@ class Settings(BaseSettings):
     # Sources: "marktechpost" (RSS feed), "hackernews" (API), "devto" (API)
     news_limit: int = 6          # 6 total = 2 from each of the 3 sources
     news_cache_ttl: int = 1800   # Cache articles for 30 minutes (seconds)
-
-    # ── Auto-Send Schedule (UTC time) ──────────────────────────────
-    # News is automatically sent to Telegram at this time every day
-    schedule_hour: int = 9       # 9 AM UTC
-    schedule_minute: int = 0
 
 
 # Single instance used across the entire app

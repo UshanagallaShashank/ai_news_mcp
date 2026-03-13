@@ -13,11 +13,7 @@ uvicorn[standard]>=0.34.0 # ASGI server to run FastAPI
 # FastMCP is included in the mcp package since v1.0
 mcp[cli]>=1.5.0
 
-# ── Google ADK (AI Agent) ────────────────────────────────────
-# Agent Development Kit — orchestrates Gemini AI with tools
-# Docs: https://google.github.io/adk-docs/
-google-adk==0.5.0
-deprecated>=1.2.14            # Required by google-adk
+
 
 # ── Telegram Bot ─────────────────────────────────────────────
 # Official Python wrapper for Telegram Bot API
@@ -32,5 +28,4 @@ httpx==0.28.1             # Async HTTP client (better than requests for async)
 pydantic-settings==2.7.0  # Type-safe settings from env vars
 python-dotenv==1.0.1      # Load .env file automatically
 
-# ── Scheduler ─────────────────────────────────────────────────
-APScheduler==3.10.4       # Background job scheduler (cron-like)
+

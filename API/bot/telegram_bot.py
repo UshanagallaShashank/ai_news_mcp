@@ -6,8 +6,7 @@ The user-facing interface for the AI news bot.
 
 Commands:
   /start   — Welcome message with instructions
-  /ainews  — AI-curated news digest (uses Google ADK agent)
-  /quick   — Quick news without AI (faster, useful as fallback)
+  /news    — Get latest news
   /sources — Show available news sources
   /help    — Show all commands
 
@@ -38,7 +37,6 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from config.settings import settings
-from agent.agent import run_news_agent
 from scraper.news import scrape_news
 from scraper.arxiv import fetch_arxiv_papers, ARXIV_CATEGORIES
 from scraper.reddit import fetch_reddit_posts
@@ -119,17 +117,15 @@ async def send_long_message(
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — show welcome message."""
     text = (
-        "👋 *Welcome to AI News Bot\\!*\n\n"
+        "👋 *Welcome to News Bot\\!*\n\n"
         "Latest AI news from 5 sources, free & real\\-time\\.\n\n"
         "*Commands:*\n"
-        "/ainews           — AI\\-curated digest\n"
-        "/quick            — Fast news, no AI\n"
+        "/news             — Get latest news\n"
         "/arxiv \\[topic\\]   — Research papers \\(ai/ml/nlp/cv\\)\n"
         "/reddit \\[sub\\]    — Community discussions\n"
         "/sources          — All news sources\n"
         "/help             — Full help\n\n"
-        "Auto\\-sends every morning at 09:00 UTC 🌅\n\n"
-        "_Built with Python · FastAPI · MCP · Google ADK_"
+        "_Built with Python · FastAPI · MCP_"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -137,10 +133,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help — show command list."""
     text = (
-        "🤖 *AI News Bot Help*\n\n"
-        "*/ainews* — AI\\-curated digest \\(10\\-30s\\)\n"
-        "  Gemini ranks and summarizes top AI news\\.\n\n"
-        "*/quick* — Fast news \\(2\\-5s, no AI\\)\n"
+        "🤖 *News Bot Help*\n\n"
+        "*/news* — Get latest news\n"
         "  Direct scrape from all sources\\.\n\n"
         "*/arxiv \\[topic\\]* — Research papers\n"
         "  Topics: ai, ml, nlp, cv, robotics\n"
@@ -148,52 +142,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "*/reddit \\[subreddit\\]* — Community posts\n"
         "  Example: /reddit LocalLLaMA\n"
         "  Default: r/MachineLearning\n\n"
-        "*/sources* — Show all sources\n\n"
-        "*Auto\\-send:* Every day at 09:00 UTC\n\n"
-        "_Tip: /quick if /ainews is slow_"
+        "*/sources* — Show all sources"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
-async def ainews_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handle /ainews — fetch and deliver AI-curated news.
-
-    Flow:
-    1. Show loading message (user knows it's working)
-    2. Run the ADK agent (may take 10-30 seconds)
-    3. Delete loading message
-    4. Send formatted news
-    """
-    loading_msg = await update.message.reply_text(
-        "⏳ Fetching AI news\\.\\.\\. This takes 10\\-30 seconds\\.  Please wait\\!",
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
-
-    try:
-        # Run the ADK agent — this is where the magic happens
-        # It fetches news, ranks it, and formats it with Gemini AI
-        news_text = await run_news_agent()
-
-        await loading_msg.delete()
-        await send_long_message(update.effective_chat.id, news_text)
-
-    except Exception as e:
-        logger.error(f"Error in /ainews: {e}", exc_info=True)
-        await loading_msg.edit_text(
-            "❌ Failed to fetch news\\. Try /quick instead or try again later\\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
-
-
-async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handle /quick — fast news without AI processing.
+    Handle /news — fetch and deliver latest news.
 
     Directly scrapes and formats articles.
-    No AI = faster response but no intelligent summarization.
     """
-    loading_msg = await update.message.reply_text("⚡ Fetching news quickly\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+    loading_msg = await update.message.reply_text("⚡ Fetching news\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
     try:
         articles = await scrape_news(limit=settings.news_limit)
@@ -208,7 +168,7 @@ async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Build better formatted message
         date_str = _escape_md(str(__import__('datetime').date.today()))
         lines = [
-            f"⚡ *Quick AI News*",
+            f"📰 *Latest News*",
             f"📅 {date_str} • {len(articles)} articles",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             ""
@@ -253,9 +213,9 @@ async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         lines += [
             "",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "⚡ _Quick mode \\(no AI curation\\)_",
+            "📰 _News from multiple sources_",
             "",
-            "🤖 /ainews • ℹ️ /help"
+            "ℹ️ /help"
         ]
 
         message = "\n".join(lines)
@@ -263,7 +223,7 @@ async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await send_long_message(update.effective_chat.id, message, parse_mode=ParseMode.MARKDOWN_V2)
 
     except Exception as e:
-        logger.error(f"Error in /quick: {e}", exc_info=True)
+        logger.error(f"Error in /news: {e}", exc_info=True)
         await loading_msg.edit_text(
             "❌ Scraping failed\\. Try again later\\.",
             parse_mode=ParseMode.MARKDOWN_V2,
@@ -383,7 +343,7 @@ async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle /sources — show list of news sources."""
     text = (
         "📡 *News Sources*\n\n"
-        "*Standard \\(/quick, /ainews\\):*\n"
+        "*Standard \\(/news\\):*\n"
         "1\\. *Marktechpost* — AI industry news \\(RSS\\)\n"
         "2\\. *HackerNews* — Tech community picks \\(Algolia API\\)\n"
         "3\\. *DEV\\.to* — Developer articles \\(Public API\\)\n\n"
@@ -412,29 +372,7 @@ def _escape_md(text: str) -> str:
 
 # ── Channel Send (used by scheduler) ─────────────────────────────
 
-async def send_news_to_channel(message: str) -> None:
-    """
-    Send a news message to the configured Telegram channel/chat.
 
-    Called by:
-    - scheduler/jobs.py (daily auto-send)
-    - The /trigger REST endpoint
-
-    Args:
-        message: Formatted news text (Markdown)
-    """
-    logger.info(f"Sending news to channel {settings.telegram_chat_id}")
-
-    try:
-        await send_long_message(
-            chat_id=settings.telegram_chat_id,
-            text=message,
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        logger.info("News sent to channel successfully")
-    except TelegramError as e:
-        logger.error(f"Failed to send news to channel: {e}")
-        raise
 
 
 # ── Setup: Register Commands in Telegram ─────────────────────────
@@ -445,8 +383,7 @@ async def setup_bot_commands() -> None:
     Users see these when they type "/" in the chat.
     """
     commands = [
-        BotCommand("ainews",  "AI-curated news digest"),
-        BotCommand("quick",   "Fast news, no AI"),
+        BotCommand("news",    "Get latest news"),
         BotCommand("arxiv",   "Research papers — /arxiv [ai|ml|nlp|cv]"),
         BotCommand("reddit",  "Community posts — /reddit [subreddit]"),
         BotCommand("sources", "Show all news sources"),
@@ -460,8 +397,7 @@ async def setup_bot_commands() -> None:
 
 application.add_handler(CommandHandler("start",   start_command))
 application.add_handler(CommandHandler("help",    help_command))
-application.add_handler(CommandHandler("ainews",  ainews_command))
-application.add_handler(CommandHandler("quick",   quick_command))
+application.add_handler(CommandHandler("news",    news_command))
 application.add_handler(CommandHandler("arxiv",   arxiv_command))
 application.add_handler(CommandHandler("reddit",  reddit_command))
 application.add_handler(CommandHandler("sources", sources_command))

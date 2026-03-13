@@ -33,7 +33,6 @@ from fastapi.responses import JSONResponse
 
 from config.settings import settings
 from mcp_server.server import mcp
-from scheduler.jobs import scheduler, start_scheduler, run_news_job
 from bot.telegram_bot import application as telegram_app, setup_bot_commands
 
 # ── Environment Detection ─────────────────────────────────────────
@@ -60,7 +59,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── STARTUP ───────────────────────────────
-    logger.info("Starting AI News MCP Server...")
+    logger.info("Starting News MCP Server...")
 
     # Initialize the Telegram bot application
     await telegram_app.initialize()
@@ -80,28 +79,12 @@ async def lifespan(app: FastAPI):
             "Run dev.py for local development with polling."
         )
 
-    # ── Scheduler ─────────────────────────────────────────────────
-    # Cloud Run scales to ZERO when idle — no persistent process = APScheduler dies.
-    # Solution: Cloud Scheduler hits POST /trigger on cron schedule instead.
-    #
-    # VPS / always-on server → APScheduler runs fine (keeps process alive)
-    if IS_CLOUD_RUN:
-        logger.info(
-            "Cloud Run detected (K_SERVICE env var set). "
-            "Skipping APScheduler — use GCP Cloud Scheduler to POST /trigger daily."
-        )
-    else:
-        start_scheduler()
-        logger.info("APScheduler started (local/VPS mode)")
-
     logger.info("Server ready!")
 
     yield  # ← Server runs here, handling requests
 
     # ── SHUTDOWN ──────────────────────────────
     logger.info("Shutting down...")
-    if not IS_CLOUD_RUN and scheduler.running:
-        scheduler.shutdown(wait=False)
     await telegram_app.stop()
     await telegram_app.shutdown()
     logger.info("Shutdown complete")
@@ -110,12 +93,12 @@ async def lifespan(app: FastAPI):
 # ── Create FastAPI App ────────────────────────────────────────────
 
 app = FastAPI(
-    title="AI News MCP Server",
+    title="News MCP Server",
     description=(
-        "AI-powered news bot backend.\n\n"
+        "News bot backend.\n\n"
         "**MCP Server**: AI clients connect at `/mcp/sse`\n"
         "**Telegram**: Webhook at `/telegram/webhook`\n"
-        "**REST API**: Direct access at `/news`, `/trigger`"
+        "**REST API**: Direct access at `/news`"
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -123,10 +106,10 @@ app = FastAPI(
 
 
 # ── Mount MCP Server ──────────────────────────────────────────────
-# MCP clients (Claude Desktop, Cursor, etc.) connect to /mcp/sse
-# They automatically discover our tools: scrape_ai_news, format_for_telegram
+# Streamable HTTP transport — works with Cloud Run and Claude Code
+# Claude Code connects to: https://your-app.run.app/mcp/
 
-app.mount("/mcp", mcp.sse_app())
+app.mount("/mcp", mcp.streamable_http_app())
 
 
 # ── REST API Endpoints ────────────────────────────────────────────
@@ -145,7 +128,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "service": "ai-news-mcp-server",
+        "service": "news-mcp-server",
         "version": "1.0.0",
     }
 
@@ -156,7 +139,7 @@ async def get_news(
     sources: str = "marktechpost,hackernews,devto",
 ):
     """
-    Fetch news directly via REST API (no AI processing).
+    Fetch news directly via REST API.
 
     Useful for:
     - Testing the scraper
@@ -181,26 +164,6 @@ async def get_news(
         "count": len(articles),
         "sources": source_list,
         "articles": [a.to_dict() for a in articles],
-    }
-
-
-@app.post("/trigger", tags=["Scheduler"])
-async def manual_trigger():
-    """
-    Manually trigger the daily news job.
-
-    Call this from:
-    - GCP Cloud Scheduler (set it to POST to this URL on a cron schedule)
-    - AWS EventBridge + HTTP target
-    - Your own scripts for testing
-    - Curl: `curl -X POST http://your-server/trigger`
-
-    The job runs in the background — this endpoint returns immediately.
-    """
-    asyncio.create_task(run_news_job())
-    return {
-        "status": "triggered",
-        "message": "News job started in background",
     }
 
 
