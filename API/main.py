@@ -8,7 +8,6 @@ What runs here:
   1. FastAPI HTTP server       — REST API endpoints
   2. MCP Server (at /mcp)     — For AI clients like Claude Desktop, Cursor
   3. Telegram webhook handler  — Receives updates from Telegram
-  4. Background scheduler      — Daily auto-send news job
 
 How to run:
   Production:  uvicorn main:app --host 0.0.0.0 --port 8080
@@ -22,7 +21,6 @@ FastAPI docs:  https://fastapi.tiangolo.com/
 Uvicorn docs:  https://www.uvicorn.org/
 """
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -34,11 +32,6 @@ from fastapi.responses import JSONResponse
 from config.settings import settings
 from mcp_server.server import mcp
 from bot.telegram_bot import application as telegram_app, setup_bot_commands
-
-# ── Environment Detection ─────────────────────────────────────────
-# Cloud Run sets K_SERVICE automatically. We use this to know we're
-# running serverless and should skip APScheduler (use Cloud Scheduler instead).
-IS_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
 
 # ── Logging ───────────────────────────────────────────────────────
 # Configure logging early so we see all startup messages
