@@ -21,10 +21,10 @@ Features:
 
 import time
 import logging
+import html
 from dataclasses import dataclass, asdict
 from typing import Optional
 import xml.etree.ElementTree as ET   # Built-in XML parser for RSS feeds
-import re
 
 import httpx
 
@@ -69,18 +69,20 @@ def _cache_set(key: str, articles: list[Article]) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────
 
-def _strip_html(html: str) -> str:
-    """Remove HTML tags and decode common HTML entities."""
-    text = re.sub(r"<[^>]+>", "", html)        # Remove tags
-    text = text.replace("&amp;", "&")
-    text = text.replace("&lt;", "<")
-    text = text.replace("&gt;", ">")
-    text = text.replace("&quot;", '"')
-    text = text.replace("&#8217;", "'")
-    text = text.replace("&#8220;", '"')
-    text = text.replace("&#8221;", '"')
-    text = text.replace("&nbsp;", " ")
-    return text.strip()
+def _strip_html(raw: str) -> str:
+    """Remove HTML tags and decode all HTML entities."""
+    # Remove all HTML tags first
+    no_tags = ""
+    in_tag = False
+    for ch in raw:
+        if ch == "<":
+            in_tag = True
+        elif ch == ">":
+            in_tag = False
+        elif not in_tag:
+            no_tags += ch
+    # html.unescape handles ALL entities: &amp; &#8217; &nbsp; etc.
+    return html.unescape(no_tags).strip()
 
 
 def _parse_rss_date(rss_date: str) -> str:
@@ -218,14 +220,19 @@ async def fetch_hackernews(limit: int = 5) -> list[Article]:
 
     articles: list[Article] = []
 
+    # Only fetch stories from the last 7 days
+    seven_days_ago = int(time.time()) - 7 * 24 * 3600
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
-                "https://hn.algolia.com/api/v1/search",
+                # search_by_date = sorted by most recent first (not relevance)
+                "https://hn.algolia.com/api/v1/search_by_date",
                 params={
                     "query": "artificial intelligence machine learning LLM",
-                    "tags": "story",           # Only stories, not comments
-                    "numericFilters": "points>15",  # Quality filter
+                    "tags": "story",
+                    # points>5 keeps quality, created_at_i ensures freshness
+                    "numericFilters": f"points>5,created_at_i>{seven_days_ago}",
                     "hitsPerPage": limit,
                 },
             )
@@ -298,6 +305,9 @@ async def fetch_devto(limit: int = 5) -> list[Article]:
             )
             response.raise_for_status()
 
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
         for item in response.json():
             title = (item.get("title") or "").strip()
             url   = item.get("url") or item.get("canonical_url") or ""
@@ -305,19 +315,25 @@ async def fetch_devto(limit: int = 5) -> list[Article]:
             if not title or not url:
                 continue
 
-            # description is already plain text
-            summary = item.get("description") or None
-            if summary:
-                summary = summary[:300] + "..." if len(summary) > 300 else summary
-
             # published_at looks like "2024-01-15T12:00:00Z"
             pub = item.get("published_at") or ""
             date = pub[:10] if len(pub) >= 10 else None
 
+            # Skip articles older than 7 days
+            if pub:
+                try:
+                    pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                    if pub_dt < cutoff:
+                        continue
+                except ValueError:
+                    pass
+
+            summary = item.get("description") or None
+            if summary:
+                summary = summary[:200] + "..." if len(summary) > 200 else summary
+
             reactions = item.get("public_reactions_count", 0)
             comments  = item.get("comments_count", 0)
-
-            # Append reaction count to summary for context
             if reactions or comments:
                 meta = f"{reactions} reactions · {comments} comments"
                 summary = f"{summary}\n{meta}" if summary else meta
@@ -400,14 +416,17 @@ async def scrape_news(
               for i in range(n)]
 
     all_articles: list[Article] = []
+    seen_urls: set[str] = set()  # Deduplicate by URL
 
     for source_name, quota in zip(valid_sources, quotas):
         fetch_fn = _SOURCE_MAP[source_name]
         try:
-            articles = await fetch_fn(quota)
-            all_articles.extend(articles)
+            fetched = await fetch_fn(quota)
+            for article in fetched:
+                if article.url and article.url not in seen_urls:
+                    seen_urls.add(article.url)
+                    all_articles.append(article)
         except Exception as e:
-            # One source failing should never crash the entire job
             logger.error(f"Source '{source_name}' raised an exception: {e}")
 
     logger.info(f"Total articles returned: {len(all_articles[:limit])}")

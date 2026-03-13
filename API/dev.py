@@ -31,15 +31,14 @@ Polling works perfectly for development but isn't recommended for production
 (it creates constant HTTP requests to Telegram's servers).
 """
 
+import argparse
 import asyncio
 import logging
-import threading
+import sys
 
 import uvicorn
-from telegram.ext import Application
 
 from config.settings import settings
-from bot.telegram_bot import application as telegram_app, setup_bot_commands
 from mcp_server.server import mcp
 
 # ── Logging ───────────────────────────────────────────────────────
@@ -100,22 +99,23 @@ async def manual_trigger():
 # ── Run Everything ────────────────────────────────────────────────
 
 async def run_telegram_polling():
-    """Run Telegram bot with polling in the same asyncio loop."""
+    """Run Telegram bot with polling — only call this if Telegram is needed."""
+    # Import here so --no-telegram mode never touches these modules
+    from bot.telegram_bot import application as telegram_app, setup_bot_commands
+
     logger.info("[DEV] Starting Telegram bot (polling mode)...")
+    logger.warning("[DEV] WARNING: polling will delete your deployed webhook!")
     await telegram_app.initialize()
     await setup_bot_commands()
     await telegram_app.start()
     await telegram_app.updater.start_polling(
         allowed_updates=["message"],
-        drop_pending_updates=True,   # Ignore messages sent while bot was offline
+        drop_pending_updates=True,
     )
     logger.info("[DEV] Telegram bot polling — send /ainews to your bot!")
 
 
-async def main():
-    """Start FastAPI and Telegram polling concurrently."""
-
-    # Create uvicorn server config (non-blocking)
+async def main(with_telegram: bool):
     config = uvicorn.Config(
         app=dev_app,
         host="0.0.0.0",
@@ -125,22 +125,35 @@ async def main():
     )
     server = uvicorn.Server(config)
 
-    # Run both FastAPI and Telegram polling in the same event loop
-    await asyncio.gather(
-        server.serve(),
-        run_telegram_polling(),
-    )
+    if with_telegram:
+        await asyncio.gather(server.serve(), run_telegram_polling())
+    else:
+        await server.serve()
 
 
 if __name__ == "__main__":
-    print("\n" + "="*50)
+    parser = argparse.ArgumentParser(description="AI News Bot — Dev Server")
+    parser.add_argument(
+        "--no-telegram",
+        action="store_true",
+        help="Run API + MCP only, skip Telegram. Safe to use while deployed server is running.",
+    )
+    args = parser.parse_args()
+
+    with_telegram = not args.no_telegram
+
+    print("\n" + "="*55)
     print("  AI News Bot — Development Mode")
-    print("="*50)
+    print("="*55)
     print(f"  API:      http://localhost:{settings.app_port}")
     print(f"  API docs: http://localhost:{settings.app_port}/docs")
     print(f"  MCP SSE:  http://localhost:{settings.app_port}/mcp/sse")
     print(f"  News API: http://localhost:{settings.app_port}/news")
     print(f"  Trigger:  POST http://localhost:{settings.app_port}/trigger")
-    print("="*50 + "\n")
+    if with_telegram:
+        print("  Telegram: POLLING MODE (will break deployed webhook!)")
+    else:
+        print("  Telegram: DISABLED (deployed server unaffected)")
+    print("="*55 + "\n")
 
-    asyncio.run(main())
+    asyncio.run(main(with_telegram=with_telegram))

@@ -272,7 +272,7 @@ jobs:
 |-----------|------------|
 | Web Framework | FastAPI + Uvicorn |
 | MCP Server | FastMCP (official Python MCP SDK) |
-| AI Agent | Google ADK + Gemini 2.0 Flash |
+| AI Agent | Google ADK + Gemini 2.5 Flash Lite |
 | Telegram | python-telegram-bot v21 |
 | Scraper | httpx + stdlib xml.etree (RSS + JSON APIs) |
 | Scheduler | APScheduler |

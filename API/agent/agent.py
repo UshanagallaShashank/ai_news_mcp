@@ -77,19 +77,32 @@ async def fetch_latest_news(limit: int = 5) -> dict:
     logger.info(f"[Agent Tool] fetch_latest_news — limit={limit}")
     articles = await scrape_news(limit=limit)
 
+    # Give the agent full summaries so it has enough context to write real insights.
+    # We pass 250 chars — enough to understand the article without excessive tokens.
+    data = [
+        {
+            "title": a.title,
+            "source": a.source,
+            "date": a.date or "",
+            "url": a.url,
+            "summary": (a.summary or "")[:250],
+        }
+        for a in articles
+    ]
+
     return {
-        "articles": [a.to_dict() for a in articles],
-        "count": len(articles),
+        "articles": data,
+        "count": len(data),
         "sources": list({a.source for a in articles}),
     }
 
 
 def format_for_telegram(
     articles: list[dict],
-    header: str = "Daily AI News Digest",
+    header: str = "🤖 AI News Digest",
 ) -> str:
     """
-    Format a list of articles into a Telegram-ready Markdown message.
+    Format a list of articles into a beautiful Telegram-ready Markdown message.
 
     Telegram Markdown rules:
     - *bold*  _italic_  `code`  [link text](url)
@@ -103,11 +116,17 @@ def format_for_telegram(
         Formatted string safe to send via Telegram
     """
     if not articles:
-        return "No articles available right now. Try again later."
+        return "❌ No articles available right now. Try again later."
 
+    # Get today's date for header
+    from datetime import date
+    today = date.today().strftime("%B %d, %Y")
+
+    # Header with emoji and styling
     lines = [
-        f"🤖 *{header}*",
-        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"*{header}*",
+        f"📅 {today} • {len(articles)} articles",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
 
@@ -116,29 +135,153 @@ def format_for_telegram(
         url     = article.get("url", "")
         source  = article.get("source", "Unknown")
         summary = article.get("summary", "")
-        date    = article.get("date", "")
+        date_str = article.get("date", "")
 
-        lines.append(f"*{i}. {title}*")
+        # Article number with priority emoji
+        if i == 1:
+            emoji = "🔥"
+            priority = "TOP STORY"
+        elif i == 2:
+            emoji = "⭐"
+            priority = "FEATURED"
+        elif i == 3:
+            emoji = "💎"
+            priority = "TRENDING"
+        else:
+            emoji = "📌"
+            priority = None
 
-        if summary:
-            short = summary[:180] + "..." if len(summary) > 180 else summary
-            lines.append(f"_{short}_")
-
-        meta = f"📰 {source}"
-        if date:
-            meta += f" · {date}"
-        lines.append(meta)
-
-        if url:
-            lines.append(f"🔗 [Read more]({url})")
-
+        # Title with priority badge
+        if priority:
+            lines.append(f"{emoji} *{i}. {title}*")
+            lines.append(f"_`{priority}`_")
+        else:
+            lines.append(f"{emoji} *{i}. {title}*")
         lines.append("")
 
+        # Enhanced summary with better formatting
+        if summary:
+            # Clean and format summary
+            clean_summary = summary.strip()
+            
+            # Smart truncation at sentence or word boundary
+            max_len = 250
+            if len(clean_summary) > max_len:
+                # Try to cut at sentence
+                sentences = clean_summary[:max_len].split('. ')
+                if len(sentences) > 1:
+                    clean_summary = '. '.join(sentences[:-1]) + '.'
+                else:
+                    # Cut at word boundary
+                    clean_summary = clean_summary[:max_len].rsplit(' ', 1)[0] + '...'
+            
+            # Format as quote-style
+            lines.append(f"💬 _{clean_summary}_")
+            lines.append("")
+
+        # Metadata line with rich icons
+        meta_parts = []
+        
+        # Source with specific icon
+        source_icons = {
+            "Marktechpost": "📰",
+            "HackerNews": "🔶",
+            "DEV.to": "�",
+            "arXiv": "📄",
+            "Reddit": "🔴"
+        }
+        icon = source_icons.get(source, "📰")
+        meta_parts.append(f"{icon} *{source}*")
+        
+        # Date with icon
+        if date_str:
+            meta_parts.append(f"📅 {date_str}")
+        
+        lines.append(" • ".join(meta_parts))
+
+        # Call-to-action link with better text
+        if url:
+            lines.append(f"🔗 [📖 Read Full Article →]({url})")
+
+        # Visual separator between articles
+        if i < len(articles):
+            lines.append("")
+            lines.append("─────────────────────────")
+            lines.append("")
+
+    # Rich footer with actions
     lines += [
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "_Powered by AI News Bot · Google ADK + Gemini_",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 _Curated by AI • Powered by Google Gemini_",
+        "",
+        "🔄 Refresh: /ainews",
+        "⚡ Quick Mode: /quick",
+        "ℹ️ Help: /help",
+        "📡 Sources: /sources"
     ]
 
+    return "\n".join(lines)
+
+
+# ── Formatter ────────────────────────────────────────────────────
+
+def _escape_md1(text: str) -> str:
+    """Escape Telegram Markdown v1 special chars."""
+    for c in ['*', '_', '[', ']', '`']:
+        text = text.replace(c, '\\' + c)
+    return text
+
+
+def _format_ai_news(articles: list[dict]) -> str:
+    """Format AI-curated articles into a Telegram message (Markdown v1)."""
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+
+    source_icons = {
+        "Marktechpost": "📰", "HackerNews": "🔶",
+        "DEV.to": "💻", "arXiv": "📄", "Reddit": "🔴",
+    }
+
+    lines = [
+        "🤖 *AI News Digest*",
+        f"📅 {today} • {len(articles)} articles",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    for i, a in enumerate(articles, start=1):
+        emoji = "🔥" if i == 1 else "⭐" if i == 2 else "📌"
+        title    = _escape_md1(a.get("title", "Untitled"))
+        source   = a.get("source", "Unknown")
+        date_str = a.get("date", "")
+        url      = a.get("url", "")
+        analysis = a.get("analysis", "")
+
+        lines.append(f"{emoji} *{i}. {title}*")
+        lines.append("")
+
+        if analysis:
+            lines.append(f"_{_escape_md1(analysis.strip())}_")
+            lines.append("")
+
+        icon = source_icons.get(source, "📰")
+        date_part = f" • 📅 {date_str}" if date_str else ""
+        lines.append(f"{icon} {_escape_md1(source)}{date_part}")
+
+        if url:
+            lines.append(f"🔗 [Read full article]({url})")
+
+        if i < len(articles):
+            lines.append("")
+            lines.append("─────────────────────────")
+            lines.append("")
+
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "_Curated by Gemini AI · /quick for raw feed · /help for commands_",
+    ]
     return "\n".join(lines)
 
 
@@ -148,29 +291,29 @@ def format_for_telegram(
 
 news_agent = Agent(
     name="ai_news_agent",
-    model="gemini-2.0-flash",   # Fast and free-tier friendly
-    description=(
-        "An AI news curator that fetches, summarizes, and delivers "
-        "AI/ML news via Telegram."
-    ),
-    instruction="""
-    You are an AI news curator helping developers and tech enthusiasts
-    stay up-to-date with artificial intelligence and machine learning.
+    model="gemini-2.5-flash-lite",
+    description="AI news curator that writes insightful analysis of AI/ML news for Telegram.",
+    instruction="""You are an AI news analyst. Your job: curate and analyze AI/ML news.
 
-    When asked to fetch and deliver news:
-    1. Call fetch_latest_news to get articles (use the requested limit)
-    2. Review the articles and identify the most important/interesting ones
-    3. Call format_for_telegram with the selected articles
-    4. Add a brief 1-2 sentence "today's theme" summary at the top if relevant
-    5. Return the formatted message
+STEP 1: Call fetch_latest_news to get articles.
 
-    Guidelines:
-    - Be concise and informative
-    - Prioritize breakthrough research, new model releases, and industry news
-    - Keep the tone professional but accessible to beginners
-    - If asked for a specific topic (e.g., "LLMs only"), filter articles accordingly
-    """,
-    tools=[fetch_latest_news, format_for_telegram],
+STEP 2: Return ONLY a JSON array. No other text, no markdown fences.
+
+Each object in the array must have exactly these fields:
+- title: article title (string)
+- url: article url (string)
+- source: source name (string)
+- date: date string (string)
+- analysis: 2-3 sentences of YOUR OWN insight — why it matters, what is novel, real-world impact. Do NOT restate the summary. Be dense and useful.
+
+Example output format:
+[{"title":"...", "url":"...", "source":"...", "date":"...", "analysis":"..."}]
+
+RULES:
+- Return ONLY the JSON array, nothing else
+- Your own analysis, not copied summaries
+- Prioritize: model releases, benchmarks, research breakthroughs, tools""",
+    tools=[fetch_latest_news],
 )
 
 
@@ -201,11 +344,7 @@ async def run_news_agent(prompt: Optional[str] = None) -> str:
         Falls back to direct formatting if the agent fails.
     """
     if prompt is None:
-        prompt = (
-            f"Please fetch the latest {settings.news_limit} AI news articles. "
-            "Summarize the overall theme in 1 sentence, then format the articles "
-            "nicely for Telegram."
-        )
+        prompt = f"Fetch the latest {settings.news_limit} AI news articles and write the newsletter."
 
     # Each run gets its own session (fresh context)
     # Using a unique session ID based on a counter keeps things clean
@@ -214,7 +353,7 @@ async def run_news_agent(prompt: Optional[str] = None) -> str:
 
     try:
         # Create a new session for this run
-        await _session_service.create_session(
+        _session_service.create_session(
             app_name="ai_news_bot",
             user_id="system",
             session_id=session_id,
@@ -236,23 +375,51 @@ async def run_news_agent(prompt: Optional[str] = None) -> str:
         logger.info(f"Running ADK agent — session={session_id}")
 
         final_response = ""
+        total_input_tokens = 0
+        total_output_tokens = 0
 
-        # Process events from the agent
-        # The agent may call tools multiple times before giving a final answer
         async for event in runner.run_async(
             user_id="system",
             session_id=session_id,
             new_message=user_message,
         ):
-            # is_final_response() is True when the agent is done
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    final_response = event.content.parts[0].text
-                break
+            # Accumulate token usage from every event that has it
+            usage = getattr(event, "usage_metadata", None)
+            if usage:
+                total_input_tokens  += getattr(usage, "prompt_token_count", 0) or 0
+                total_output_tokens += getattr(usage, "candidates_token_count", 0) or 0
+
+            # Check if this event has text content
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        final_response = part.text
+                        
+            # Once we see the final response, stop updating (but let generator exhaust)
+            # Do NOT break — breaking causes GeneratorExit which triggers an
+            # OpenTelemetry context detach error ("Token was created in a different Context")
+
+        if total_input_tokens or total_output_tokens:
+            logger.info(
+                f"[Tokens] input={total_input_tokens} "
+                f"output={total_output_tokens} "
+                f"total={total_input_tokens + total_output_tokens}"
+            )
 
         if final_response:
             logger.info("ADK agent completed successfully")
-            return final_response
+            import json
+            # Strip markdown code fences if the model wrapped the JSON
+            text = final_response.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            articles = json.loads(text)
+            return _format_ai_news(articles)
+        else:
+            logger.warning("ADK agent completed but returned no text response")
 
     except Exception as e:
         logger.error(f"ADK agent failed: {e}")

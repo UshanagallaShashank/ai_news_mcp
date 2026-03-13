@@ -40,6 +40,8 @@ from telegram.error import TelegramError
 from config.settings import settings
 from agent.agent import run_news_agent
 from scraper.news import scrape_news
+from scraper.arxiv import fetch_arxiv_papers, ARXIV_CATEGORIES
+from scraper.reddit import fetch_reddit_posts
 
 logger = logging.getLogger(__name__)
 
@@ -117,14 +119,16 @@ async def send_long_message(
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — show welcome message."""
     text = (
-        "👋 *Welcome to AI News Bot!*\n\n"
-        "I deliver the latest AI & machine learning news, curated by Gemini AI.\n\n"
+        "👋 *Welcome to AI News Bot\\!*\n\n"
+        "Latest AI news from 5 sources, free & real\\-time\\.\n\n"
         "*Commands:*\n"
-        "/ainews  — AI\\-curated news digest \\(10\\-30 sec\\)\n"
-        "/quick   — Fast news without AI\n"
-        "/sources — List news sources\n"
-        "/help    — Show this message\n\n"
-        "I also send news *automatically every morning* 🌅\n\n"
+        "/ainews           — AI\\-curated digest\n"
+        "/quick            — Fast news, no AI\n"
+        "/arxiv \\[topic\\]   — Research papers \\(ai/ml/nlp/cv\\)\n"
+        "/reddit \\[sub\\]    — Community discussions\n"
+        "/sources          — All news sources\n"
+        "/help             — Full help\n\n"
+        "Auto\\-sends every morning at 09:00 UTC 🌅\n\n"
         "_Built with Python · FastAPI · MCP · Google ADK_"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
@@ -134,16 +138,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Handle /help — show command list."""
     text = (
         "🤖 *AI News Bot Help*\n\n"
-        "*/ainews* — Full AI digest\n"
-        "  Uses Google ADK \\+ Gemini to fetch, rank,\n"
-        "  and summarize the most important AI news\\.\n"
-        "  Takes 10\\-30 seconds\\.\n\n"
-        "*/quick* — Fast news\n"
-        "  Direct scraping, no AI processing\\.\n"
-        "  Results in 2\\-5 seconds\\.\n\n"
-        "*/sources* — Show news sources\n\n"
+        "*/ainews* — AI\\-curated digest \\(10\\-30s\\)\n"
+        "  Gemini ranks and summarizes top AI news\\.\n\n"
+        "*/quick* — Fast news \\(2\\-5s, no AI\\)\n"
+        "  Direct scrape from all sources\\.\n\n"
+        "*/arxiv \\[topic\\]* — Research papers\n"
+        "  Topics: ai, ml, nlp, cv, robotics\n"
+        "  Example: /arxiv nlp\n\n"
+        "*/reddit \\[subreddit\\]* — Community posts\n"
+        "  Example: /reddit LocalLLaMA\n"
+        "  Default: r/MachineLearning\n\n"
+        "*/sources* — Show all sources\n\n"
         "*Auto\\-send:* Every day at 09:00 UTC\n\n"
-        "_Tip: Use /quick if /ainews is slow_"
+        "_Tip: /quick if /ainews is slow_"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -198,13 +205,58 @@ async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
-        lines = ["📰 *Quick AI News*\n"]
+        # Build better formatted message
+        date_str = _escape_md(str(__import__('datetime').date.today()))
+        lines = [
+            f"⚡ *Quick AI News*",
+            f"📅 {date_str} • {len(articles)} articles",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            ""
+        ]
+        
         for i, article in enumerate(articles, start=1):
-            lines.append(f"*{i}\\. {_escape_md(article.title)}*")
-            lines.append(f"📰 {article.source}")
-            if article.url:
-                lines.append(f"🔗 [Read more]({article.url})")
+            # Emoji based on position
+            emoji = "🔥" if i == 1 else "⭐" if i == 2 else "📌"
+            lines.append(f"{emoji} *{i}\\. {_escape_md(article.title)}*")
             lines.append("")
+            
+            # Summary if available
+            if article.summary:
+                summary = article.summary[:150]
+                if len(article.summary) > 150:
+                    summary += "\\.\\.\\."
+                lines.append(f"_{_escape_md(summary)}_")
+                lines.append("")
+            
+            # Source with icon
+            source_icons = {
+                "Marktechpost": "📰",
+                "HackerNews": "🔶",
+                "DEV.to": "💻",
+                "arXiv": "📄",
+                "Reddit": "🔴"
+            }
+            icon = source_icons.get(article.source, "📰")
+            src = _escape_md(article.source)
+            date_part = f" • 📅 {_escape_md(article.date)}" if article.date else ""
+            lines.append(f"{icon} {src}{date_part}")
+            
+            if article.url:
+                lines.append(f"🔗 [Read full article]({article.url})")
+            
+            # Separator
+            if i < len(articles):
+                lines.append("")
+                lines.append("─────────────────────────")
+                lines.append("")
+
+        lines += [
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "⚡ _Quick mode \\(no AI curation\\)_",
+            "",
+            "🤖 /ainews • ℹ️ /help"
+        ]
 
         message = "\n".join(lines)
         await loading_msg.delete()
@@ -218,20 +270,131 @@ async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+async def arxiv_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle /arxiv [topic] — fetch latest research papers from Arxiv.
+
+    Usage:
+      /arxiv        → AI papers (default)
+      /arxiv ml     → Machine Learning papers
+      /arxiv nlp    → NLP / Language papers
+      /arxiv cv     → Computer Vision papers
+    """
+    # Get topic from command args, e.g. "/arxiv nlp" → "nlp"
+    topic = (context.args[0].lower() if context.args else "ai")
+    valid_topics = list(ARXIV_CATEGORIES.keys())
+
+    if topic not in valid_topics:
+        await update.message.reply_text(
+            f"Unknown topic\\. Use: {', '.join(valid_topics)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+
+    category = ARXIV_CATEGORIES[topic]
+    loading_msg = await update.message.reply_text(
+        f"🔬 Fetching Arxiv papers for *{_escape_md(topic.upper())}* \\({_escape_md(category)}\\)\\.\\.\\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+    try:
+        papers = await fetch_arxiv_papers(topic=topic, limit=5)
+
+        if not papers:
+            await loading_msg.edit_text(
+                "❌ No papers found\\. Try again in a few minutes\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        lines = [f"🔬 *Arxiv \u2014 {_escape_md(topic.upper())} Papers*\n"]
+        for i, p in enumerate(papers, start=1):
+            lines.append(f"*{i}\\. {_escape_md(p['title'])}*")
+            if p.get("authors"):
+                lines.append(f"👤 _{_escape_md(p['authors'][:60])}_")
+            date_part = f" · {_escape_md(p['date'])}" if p.get("date") else ""
+            lines.append(f"📰 Arxiv{date_part}")
+            if p.get("url"):
+                lines.append(f"🔗 [Read paper]({p['url']})")
+            lines.append("")
+
+        await loading_msg.delete()
+        await send_long_message(
+            update.effective_chat.id,
+            "\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in /arxiv: {e}", exc_info=True)
+        await loading_msg.edit_text("❌ Failed to fetch papers\\. Try again later\\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+
+async def reddit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle /reddit [subreddit] — fetch top posts from a subreddit.
+
+    Usage:
+      /reddit                  → r/MachineLearning (default)
+      /reddit LocalLLaMA       → r/LocalLLaMA
+      /reddit artificial       → r/artificial
+    """
+    subreddit = (context.args[0] if context.args else "MachineLearning")
+
+    loading_msg = await update.message.reply_text(
+        f"💬 Fetching r/{_escape_md(subreddit)} top posts\\.\\.\\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+    try:
+        posts = await fetch_reddit_posts(subreddit=subreddit, sort="top", time_filter="day", limit=5)
+
+        if not posts:
+            await loading_msg.edit_text(
+                f"❌ No posts found in r/{_escape_md(subreddit)}\\. It may be private or empty\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        lines = [f"💬 *r/{_escape_md(subreddit)} \u2014 Today\\'s Top*\n"]
+        for i, p in enumerate(posts, start=1):
+            lines.append(f"*{i}\\. {_escape_md(p['title'])}*")
+            score_text = _escape_md(f"⬆ {p['score']} · 💬 {p['comments']} comments")
+            lines.append(score_text)
+            date_part = f" · {_escape_md(p['date'])}" if p.get("date") else ""
+            lines.append(f"📰 Reddit{date_part}")
+            if p.get("url"):
+                lines.append(f"🔗 [Open post]({p['url']})")
+            lines.append("")
+
+        await loading_msg.delete()
+        await send_long_message(
+            update.effective_chat.id,
+            "\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in /reddit: {e}", exc_info=True)
+        await loading_msg.edit_text("❌ Failed to fetch Reddit posts\\. Try again later\\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+
 async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /sources — show list of news sources."""
     text = (
         "📡 *News Sources*\n\n"
-        "1\\. *Marktechpost* \\(RSS\\)\n"
-        "   AI/ML research papers and industry news\n"
-        "   _marktechpost\\.com_\n\n"
-        "2\\. *HackerNews* \\(Algolia API\\)\n"
-        "   Tech community discussions about AI\n"
-        "   _news\\.ycombinator\\.com_\n\n"
-        "3\\. *DEV\\.to* \\(Public API\\)\n"
-        "   Developer AI articles and tutorials\n"
-        "   _dev\\.to_\n\n"
-        "_All free · No API keys · Cached 30 min_"
+        "*Standard \\(/quick, /ainews\\):*\n"
+        "1\\. *Marktechpost* — AI industry news \\(RSS\\)\n"
+        "2\\. *HackerNews* — Tech community picks \\(Algolia API\\)\n"
+        "3\\. *DEV\\.to* — Developer articles \\(Public API\\)\n\n"
+        "*Research \\(/arxiv \\[topic\\]\\):*\n"
+        "4\\. *Arxiv* — Research papers \\(cs\\.AI, cs\\.LG, cs\\.CL, cs\\.CV\\)\n"
+        "   Topics: ai, ml, nlp, cv, robotics\n\n"
+        "*Community \\(/reddit \\[sub\\]\\):*\n"
+        "5\\. *Reddit* — Community discussions \\(JSON API\\)\n"
+        "   Default: r/MachineLearning\n"
+        "   Also try: r/LocalLLaMA, r/artificial\n\n"
+        "_All free · No API keys required_"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -282,20 +445,23 @@ async def setup_bot_commands() -> None:
     Users see these when they type "/" in the chat.
     """
     commands = [
-        BotCommand("ainews", "Get AI-curated news digest"),
-        BotCommand("quick",  "Quick news without AI (faster)"),
-        BotCommand("sources", "Show news sources"),
-        BotCommand("help",   "Show help and commands"),
+        BotCommand("ainews",  "AI-curated news digest"),
+        BotCommand("quick",   "Fast news, no AI"),
+        BotCommand("arxiv",   "Research papers — /arxiv [ai|ml|nlp|cv]"),
+        BotCommand("reddit",  "Community posts — /reddit [subreddit]"),
+        BotCommand("sources", "Show all news sources"),
+        BotCommand("help",    "Show help and commands"),
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands registered")
 
 
 # ── Register All Handlers ─────────────────────────────────────────
-# Map each command string to its handler function
 
 application.add_handler(CommandHandler("start",   start_command))
 application.add_handler(CommandHandler("help",    help_command))
 application.add_handler(CommandHandler("ainews",  ainews_command))
 application.add_handler(CommandHandler("quick",   quick_command))
+application.add_handler(CommandHandler("arxiv",   arxiv_command))
+application.add_handler(CommandHandler("reddit",  reddit_command))
 application.add_handler(CommandHandler("sources", sources_command))

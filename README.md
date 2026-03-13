@@ -7,7 +7,7 @@ An intelligent AI news aggregator that scrapes, curates, and delivers daily AI/M
 ## Features
 
 - **Multi-Source Aggregation** — Marktechpost, HackerNews, and DEV.to
-- **AI-Powered Curation** — Google Gemini 2.0 Flash for summarization
+- **AI-Powered Curation** — Google Gemini 1.5 Flash for summarization
 - **Telegram Bot** — Interactive commands for instant news access
 - **MCP Server** — Exposes tools for AI clients (Claude Desktop, Cursor IDE)
 - **Automated Delivery** — Daily scheduled news at configurable times
@@ -76,6 +76,33 @@ uvicorn main:app --host 0.0.0.0 --port 8080
 - MCP endpoint: `http://localhost:8080/mcp/sse`
 
 ## Usage
+
+### Why MCP Server?
+
+The MCP (Model Context Protocol) server makes your news scraper available to ANY AI client, not just your Telegram bot.
+
+**Without MCP**: Scraper locked in your app
+```
+Your Telegram Bot → Scraper → News
+```
+
+**With MCP**: Any AI tool can use it
+```
+Claude Desktop → MCP → Your Scraper → News
+Cursor IDE     → MCP → Your Scraper → News  
+Cline          → MCP → Your Scraper → News
+Your Bot       → MCP → Your Scraper → News
+```
+
+**Real examples**:
+- Ask Claude Desktop: "Get me 10 AI articles about LLMs and write a summary"
+- In Cursor IDE while coding: "What's new in AI today?"
+- Other developers can connect to your MCP server
+- Your scraper becomes a reusable tool across multiple AI apps
+
+**MCP vs REST API**:
+- REST: You manually call endpoints, parse JSON, handle errors
+- MCP: AI agents auto-discover tools, understand parameters, use intelligently
 
 ### Telegram Commands
 
@@ -177,7 +204,7 @@ Key environment variables (see [API/.env.example](API/.env.example)):
 ## Tech Stack
 
 - **Framework**: FastAPI + Uvicorn
-- **AI**: Google ADK + Gemini 2.0 Flash
+- **AI**: Google ADK + Gemini 1.5 Flash
 - **MCP**: FastMCP (Model Context Protocol)
 - **Bot**: python-telegram-bot v21
 - **Scraping**: httpx + stdlib
