@@ -7,12 +7,11 @@ Use this for LOCAL DEVELOPMENT only.
 Differences from main.py (production):
   - Uses Telegram POLLING instead of webhook
     (No public URL needed — bot asks Telegram for updates every second)
-  - No APScheduler (run manually with: curl -X POST localhost:8080/trigger)
   - Runs FastAPI + Telegram polling simultaneously
 
 How to use:
   1. Copy .env.example to .env
-  2. Fill in GOOGLE_API_KEY and TELEGRAM_TOKEN
+  2. Fill in TELEGRAM_TOKEN
   3. Leave WEBHOOK_URL empty
   4. Run: python dev.py
 
@@ -22,7 +21,7 @@ You'll see:
   - API docs at http://localhost:8080/docs
   - Telegram bot responding to your commands
 
-To test in Telegram: open your bot and send /ainews
+To test in Telegram: open your bot and send /news
 To test the API:     curl http://localhost:8080/news
 To test MCP:         connect Claude Desktop to http://localhost:8080/mcp/sse
 
@@ -66,7 +65,7 @@ async def dev_lifespan(app: FastAPI):
 
 
 dev_app = FastAPI(
-    title="AI News Bot (Dev Mode)",
+    title="News Bot (Dev Mode)",
     description="Development server — Telegram polling mode",
     version="1.0.0-dev",
     lifespan=dev_lifespan,
@@ -88,14 +87,6 @@ async def get_news(limit: int = 5):
     return {"count": len(articles), "articles": [a.to_dict() for a in articles]}
 
 
-@dev_app.post("/trigger")
-async def manual_trigger():
-    """Manually run the news job for testing."""
-    from scheduler.jobs import run_news_job
-    asyncio.create_task(run_news_job())
-    return {"status": "triggered"}
-
-
 # ── Run Everything ────────────────────────────────────────────────
 
 async def run_telegram_polling():
@@ -112,7 +103,7 @@ async def run_telegram_polling():
         allowed_updates=["message"],
         drop_pending_updates=True,
     )
-    logger.info("[DEV] Telegram bot polling — send /ainews to your bot!")
+    logger.info("[DEV] Telegram bot polling — send /news to your bot!")
 
 
 async def main(with_telegram: bool):
@@ -132,7 +123,7 @@ async def main(with_telegram: bool):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AI News Bot — Dev Server")
+    parser = argparse.ArgumentParser(description="News Bot — Dev Server")
     parser.add_argument(
         "--no-telegram",
         action="store_true",
@@ -143,13 +134,12 @@ if __name__ == "__main__":
     with_telegram = not args.no_telegram
 
     print("\n" + "="*55)
-    print("  AI News Bot — Development Mode")
+    print("  News Bot — Development Mode")
     print("="*55)
     print(f"  API:      http://localhost:{settings.app_port}")
     print(f"  API docs: http://localhost:{settings.app_port}/docs")
     print(f"  MCP SSE:  http://localhost:{settings.app_port}/mcp/sse")
     print(f"  News API: http://localhost:{settings.app_port}/news")
-    print(f"  Trigger:  POST http://localhost:{settings.app_port}/trigger")
     if with_telegram:
         print("  Telegram: POLLING MODE (will break deployed webhook!)")
     else:
