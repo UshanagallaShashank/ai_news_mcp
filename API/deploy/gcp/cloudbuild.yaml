@@ -42,7 +42,7 @@ steps:
       - --image=gcr.io/$PROJECT_ID/ai-news-bot:$COMMIT_SHA
       - --region=us-central1                               # Free tier region
       - --platform=managed
-      - --allow-unauthenticated                            # Allow public /trigger calls
+      - --allow-unauthenticated                            # Allow public access
       - --port=8080
       - --memory=512Mi                                     # 512MB RAM
       - --cpu=1
@@ -50,7 +50,6 @@ steps:
       - --max-instances=3
       - --timeout=300                                      # 5min timeout (for long scraping)
       # Load secrets from Secret Manager (set these up once):
-      - --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest
       - --set-secrets=TELEGRAM_TOKEN=TELEGRAM_TOKEN:latest
       - --set-secrets=TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest
       - --set-secrets=WEBHOOK_URL=WEBHOOK_URL:latest
