@@ -2,7 +2,7 @@
 
 An intelligent AI news aggregator that scrapes, curates, and delivers daily AI/ML news via Telegram, powered by Google Gemini and exposed as an MCP server for AI clients.
 
-**Repository**: [github.com/UshanagallaShashank/ai_news_mcprepo](https://github.com/UshanagallaShashank/ai_news_mcprepo)
+**Repository**: [github.com/UshanagallaShashank/ai_news_mcp](https://github.com/UshanagallaShashank/ai_news_mcp)
 
 ## Features
 
@@ -43,8 +43,8 @@ APScheduler  ──────►  Google ADK Agent (Gemini)  ──►    └�
 ### Installation
 
 ```bash
-git clone https://github.com/UshanagallaShashank/ai_news_mcprepo.git
-cd ai_news_mcprepo/API
+git clone https://github.com/UshanagallaShashank/ai_news_mcp.git
+cd ai_news_mcp/API
 
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
@@ -186,4 +186,4 @@ Key environment variables (see [API/.env.example](API/.env.example)):
 
 ## License
 
-MIT — see LICENSE file for details. Contributions welcome via [issues or PRs](https://github.com/UshanagallaShashank/ai_news_mcprepo).
+MIT — see LICENSE file for details. Contributions welcome via [issues or PRs](https://github.com/UshanagallaShashank/ai_news_mcp).
